@@ -1,118 +1,109 @@
 import numpy as np
 
-# gdc 
 def gcd(a, b):
     while b:
         a, b = b, a % b
     return a
 
-# Calculate the modular inverse of a matrix
 def find_mod_inverse(a, m):
-    # Finds the number x such that (a * x) % m == 1
+    """Finds the multiplicative inverse of a modulo m."""
+    a = a % m
     for x in range(1, m):
         if (a * x) % m == 1:
             return x
     return None
 
-# Find the key 
-def generate_hill_key(n, m=26):
-    while True:
-        # 1. Create a random n x n matrix
-        key = np.random.randint(0, m, (n, n))
-        
-        # 2. Calculate determinant
-        det = int(np.round(np.linalg.det(key))) % m
-        
-        # 3. Check if determinant is coprime to m
-        if det != 0 and gcd(det, m) == 1:
-            return key
+def get_matrix_determinant(matrix):
+    """Calculates determinant using pure integers to avoid float betrayal."""
+    return int(np.round(np.linalg.det(matrix)))
 
-# Encryption 
-def encryption(message, key):
-    # Conversion letters to numbers
-    message_num = [ord(char) - ord('A') for char in message]
+def get_integer_adjugate(matrix):
+    """Calculates the adjugate matrix using integer math for 2x2 or 3x3."""
+    n = len(matrix)
+    adjugate = np.zeros((n, n), dtype=int)
     
-    # Padding
-    while len(message_num) % key.shape[0] != 0:
-        message_num.append(25)  # Padding with 'Z' (25)
-    
-    # Reshape the message into blocks
-    message_blocks = np.array(message_num).reshape(-1, key.shape[0])
-    
-    # Encrypt each block
-    encrypted_blocks = (message_blocks @ key) % 26
-    
-    # Convert back to characters
-    encrypted_message = ''.join(chr(num + ord('A')) for num in encrypted_blocks.flatten())
-    
-    return encrypted_message, encrypted_blocks
+    if n == 2:
+        adjugate[0, 0] = matrix[1, 1]
+        adjugate[0, 1] = -matrix[0, 1]
+        adjugate[1, 0] = -matrix[1, 0]
+        adjugate[1, 1] = matrix[0, 0]
+    else:
+        # For 3x3 and up, we use the cofactor method
+        for i in range(n):
+            for j in range(n):
+                # Create the minor matrix
+                minor = np.delete(np.delete(matrix, i, axis=0), j, axis=1)
+                # Calculate cofactor: (-1)^(i+j) * det(minor)
+                cofactor = ((-1)**(i + j)) * get_matrix_determinant(minor)
+                # Adjugate is the transpose of the cofactor matrix
+                adjugate[j, i] = cofactor
+    return adjugate
 
-# Decryption 
-def decryption(encrypted_message, key):
-    n = key.shape[0]
-    # 1. Get the Determinant (Properly rounded!)
-    det = int(np.round(np.linalg.det(key)))
-    det_mod = det % 26
-    det_inv = find_mod_inverse(det_mod, 26)
-
+def get_hill_inverse(key, m=26):
+    det = get_matrix_determinant(key)
+    det_mod = det % m
+    det_inv = find_mod_inverse(det_mod, m)
+    
     if det_inv is None:
-        raise ValueError("Key not invertible mod 26")
-
-    # 2. Find the Adjugate Matrix using the floating point inverse
-    # Adjugate = det * inv(matrix)
-    # We use round() then int() to stop 1.0 becoming 0
-    adjugate = np.round(np.linalg.inv(key) * det).astype(int) % 26
-
-    # 3. Multiply by the modular inverse of the determinant
-    inverse_key_mod = (det_inv * adjugate) % 26
-
-    # 4. Decrypt (Message @ Inverse_Key)
-    encrypted_num = [ord(char) - ord('A') for char in encrypted_message]
-    encrypted_blocks = np.array(encrypted_num).reshape(-1, n)
+        return None
     
-    decrypted_blocks = (encrypted_blocks @ inverse_key_mod) % 26
+    adjugate = get_integer_adjugate(key)
+    # Final step: (det_inv * adjugate) mod m
+    return (det_inv * adjugate) % m
+
+def encryption(text, key):
+    n = key.shape[0]
+    text = text.upper().replace(" ", "")
+    while len(text) % n != 0:
+        text += 'Z'
+    nums = [ord(c) - ord('A') for c in text]
     
-    # 5. Build final string
-    decrypted_message = ''.join(chr(int(np.round(num)) + ord('A')) for num in decrypted_blocks.flatten())
+    # We reshape and TRANSPOSE to make each block a column
+    blocks = np.array(nums).reshape(-1, n).T
     
-    return decrypted_message
+    # NEW MATH: Key @ Blocks
+    cipher_nums = (key @ blocks) % 26
+    
+    # Transpose back to read it correctly
+    return "".join(chr(int(val) + ord('A')) for val in cipher_nums.T.flatten())
 
-# Padding removal (if needed)
-def remove_padding(message):
-    return message.rstrip('Z')
+def decryption(cipher, key):
+    n = key.shape[0]
+    inv_key = get_hill_inverse(key)
+    if inv_key is None: return "ERROR: Key not invertible!"
+    
+    nums = [ord(c) - ord('A') for c in cipher]
+    blocks = np.array(nums).reshape(-1, n).T
+    
+    # NEW MATH: Inv_Key @ Blocks
+    plain_nums = (inv_key @ blocks) % 26
+    
+    # Transpose back to read it correctly
+    return "".join(chr(int(np.round(val)) + ord('A')) for val in plain_nums.T.flatten())
 
-# Main loop
-while True:
-    print("Hill Cipher")
-    print("Enter message:")
-    message = input().upper().replace(" ", "")  # Remove spaces and convert to uppercase
-    if not message: 
-        print("Message cannot be empty. Please try again.")
-        continue
-    print("Enter key size (n x n):")
-    try:        
-        n = int(input())
-        if n <= 0:            
-            print("Key size must be a positive integer. Please try again.")
-            continue
-    except ValueError:
-        print("Invalid input for key size. Please enter a positive integer.")
-        continue
-
-    key = generate_hill_key(n)
-    print("Generated Key:")
+def main():
+    print("--- HILL CIPHER SYSTEM ---")
+    size = int(input("Enter matrix size (e.g., 2 or 3): "))
+    
+    # Generate a valid key
+    valid_found = False
+    while not valid_found:
+        key = np.random.randint(0, 26, (size, size))
+        if find_mod_inverse(get_matrix_determinant(key) % 26, 26) is not None:
+            valid_found = True
+    
+    print("\nGenerated Valid Key Matrix:")
     print(key)
+    
+    while True:
+        user_msg = input("\nEnter message to encrypt (or 'exit'): ")
+        if user_msg.lower() == 'exit': break
+        
+        enc = encryption(user_msg, key)
+        dec = decryption(enc, key)
+        
+        print(f"Encrypted: {enc}")
+        print(f"Decrypted: {dec}")
 
-    print("Encrypting message "+ message )
-
-    encrypted_message, encrypted_blocks= encryption(message, key)
-    print("Encrypted Message:")
-    print(encrypted_message + "\nAs matrix: \n" + str(encrypted_blocks))
-
-    decrypted_message = decryption(encrypted_message, key)
-    print("Decrypted Message:")
-    print(decrypted_message)
-
-    if(decrypted_message[len(decrypted_message) - 1] == 'Z'):
-        print("With possible padding removed:")
-        print(remove_padding(decrypted_message))    
+if __name__ == "__main__":
+    main()
